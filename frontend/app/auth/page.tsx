@@ -1,8 +1,8 @@
 import React from 'react';
-import RoleButton from './components/rolebutton';
+import RoleButton from '../components/rolebutton';
 
 
-const LoginPage = () => {
+export default function AuthPage() {
     return (
       <div className="flex flex-col items-center p-6">
             <h1 className="text-3xl font-bold text-gray-800 sm:text-5xl mb-8">Select Your Role</h1> 
@@ -13,6 +13,5 @@ const LoginPage = () => {
             </div>
         </div>
     );
-};
+}
 
-export default LoginPage;
