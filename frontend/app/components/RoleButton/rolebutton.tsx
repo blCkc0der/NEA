@@ -1,15 +1,15 @@
 import React from "react";
 import Link from "next/link";
-import {Users, Warehouse, GraduationCap, User} from 'lucide-react';
+import {Users, Warehouse, GraduationCap} from 'lucide-react';
 
 interface RoleButtonProps {
-    role: 'admin' | 'stock-manager' | 'teacher';
+    role: 'admin' | 'stock_manager' | 'teacher';
     title: string;
 }
 
 const icons = {
     admin: Users,
-    'stock-manager': Warehouse,
+    stock_manager: Warehouse,
     teacher: GraduationCap
 }
 

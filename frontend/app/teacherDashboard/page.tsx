@@ -6,6 +6,7 @@ const notifications = [
     {id: 1, message: "Your request #123 has been approved", time: "2hrs ago"},
     {id: 2, message: "New stationery items available", time: "1 day ago"},
 ]
+
 export default function DashboardPage() {
     
     return (
@@ -19,19 +20,6 @@ export default function DashboardPage() {
                     placeholder="Search"
                     className="w-full px-2 bg-transparent focus:outline-none"
                 /> 
-            </div>
-        </div>
-
-        {/* Stock level grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-            <div className="bg-white rounded-lg p-4 shadow-sm">
-                <div className="flex items-center justify-between">
-                    <button>
-                        <p className="font-semibold"> Submit Request </p>
-                        <h2 className="text-sm text-gray-500"> Create new stationery request </h2>
-                    </button>
-                    <SquarePlus className="w-10 h-10 text-gray-500"/>
-                </div>
             </div>
         </div>
 

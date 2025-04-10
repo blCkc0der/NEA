@@ -1,122 +1,149 @@
 'use client';
-import {Home, Box, Bell, ClipboardList, BarChart, User, LogOut, BookOpen, Settings, MessageSquare } from 'lucide-react';
-import React from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
+import { Home, Box, Bell, ClipboardList, User, BarChart } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import LogoutButton from '../components/LogOutButton/LogOutButton';
 
-// nav item component with active state
-const NavItem = ({
-    title, 
-    icon, 
-    href 
-} : {
-    title: string,
-    icon: React.ReactNode,
-    href: string,
+// Define the props interface for type safety
+const NavItem = ({ 
+  title, 
+  icon, 
+  href,
+  isCollapsed // Add isCollapsed to NavItem props
+}: { 
+  title: string; 
+  icon: React.ReactNode;
+  href: string;
+  isCollapsed: boolean;
 }) => {
-    const pathname = usePathname();
-    const isActive = pathname === href;
+  const pathname = usePathname();
+  const isActive = pathname === href;
 
-    return (
-        <Link 
-            href= {href}
-            className={`flex items-center space-x-3 p-3 rounded-lg transition-colors
-                ${isActive 
-                    ? 'bg-indigo-50 text-indigo-600-200' 
-                    : 'text-gray-600 hover:bg-gray-100'}`}
-        >
-
-            
-            {icon}
-            <span className='font-medium'>{title}</span> 
-        
-        </Link>
-    );
+  return (
+    <Link
+      href={href}
+      className={`flex items-center p-3 rounded-lg transition-colors ${
+        isActive 
+          ? 'bg-indigo-50 text-indigo-600' 
+          : 'text-gray-600 hover:bg-gray-100'
+      } ${isCollapsed ? 'justify-center' : 'space-x-3'}`}
+    >
+      <span className="w-5 h-5">{icon}</span>
+      {!isCollapsed && <span className="font-medium">{title}</span>}
+    </Link>
+  );
 };
 
-//Sidebar component
-export default function Dashboardlayout({children}: {children: React.ReactNode}) {
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
-    const router = useRouter();
+  // Auto-collapse on small screens
+  useEffect(() => {
+    const handleResize = () => {
+      setIsCollapsed(window.innerWidth < 768);
+    };
 
-    const handleLogout =  () => {
-        // perform logout
-        router.push('/login')
-    }
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
-    return (
-        <div className='flex min-h-screen bg-gray-50'>
-            {/*Navabar navigation*/}
-            <nav className='w-64 bg-white border-r border-gray-200 fixed h-full'>
-                <div className='mb-8'>
-                    <div className='flox items-center space-x-2 text-indigo-600 font-medium'>
-                        <span className=''> LOGO </span>
-                    </div>
-                    <div className='space-y-2'>
-                        <NavItem
-                            title='Dashboard'
-                            icon = {<Home className='w-5 h-5'/>}
-                            href='/teacherDashboard'
-                        />
-                        <NavItem
-                            title='Inventory'
-                            icon = {<Box className='w-5 h-5'/>}
-                            href='/teacherDashboard/inventory'
-                        />
-                        <NavItem
-                            title='My Requests'
-                            icon = {<ClipboardList className='w-5 h-5'/>}
-                            href='/teacherDashboard/myRequests'
-                        />
-                        <NavItem
-                            title='Catalog'
-                            icon = {<BookOpen className='w-5 h-5'/>}
-                            href='/teacherDashboard/catalog'
-                        />
-                        <NavItem
-                            title='Messages'
-                            icon = {<BarChart className='w-5 h-5'/>}
-                            href='/teacherDashboard/messages'
-                        />
-                        <NavItem
-                            title='Notifications'
-                            icon = {<Bell className='w-5 h-5'/>}
-                            href='/teacherDashboard/notifications'
-                        />  
-                        <NavItem
-                            title='Settings'
-                            icon = {<Settings className='w-5 h-5'/>}
-                            href='/teacherDashboard/settings'
-                        />  
+  const handleToggle = () => {
+    setIsCollapsed(!isCollapsed);
+  };
 
-                        {/*Logout button*/}
-                        <div className='mt-auto pt-4 border-t border-gray-200'>
-                            <button
-                                onClick={handleLogout}
-                                className='flex items-center space-x-2 p-3 rounded-lg text-grey-60 hover:bg-grey-100'
-                            >
-                                <LogOut className='w-5 h-5'/>
-                                <span className='font-medium'> LogOut</span>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </nav>
-
-            {/* Main contents */}
-            <main className='flex-1 p-8 ml-64'>
-                {/* Top Mavigation */}
-                <div className='flex items-center justify-between mb-8'>
-                    <h1 className='text-2xl font-bold text-gray-800'> DASHBOARD</h1>
-                    <div className='flex items-center space-x-4'>
-                        <button>
-                            <User className='w-5 h-5'/>
-                        </button>
-                    </div>
-                </div>
-                {children}
-            </main>
+  return (
+    <div className="flex min-h-screen bg-gray-50">
+      {/* Teacher Sidebar */}
+      <nav className={`bg-white border-r border-gray-200 p-4 fixed h-full transition-all ${
+        isCollapsed ? 'w-16' : 'w-64'
+      }`}>
+        <div className="mb-8 flex items-center justify-between">
+          {!isCollapsed && (
+            <div className="flex items-center space-x-2 text-blue-600 font-bold text-xl">
+              <span>SIMS</span>
+            </div>
+          )}
+          <button onClick={handleToggle} className="text-gray-600">
+            ☰
+          </button>
         </div>
 
-    );
-};
+        <div className="space-y-2">
+          <NavItem 
+            title="Dashboard" 
+            icon={<Home className="w-5 h-5" />} 
+            href="/teacherDashboard"
+            isCollapsed={isCollapsed}
+          />
+          <NavItem
+            title="My Inventory"
+            icon={<Box className="w-5 h-5" />}
+            href="/teacherDashboard/inventory"
+            isCollapsed={isCollapsed}
+          />
+          <NavItem
+            title="Requests"
+            icon={<ClipboardList className="w-5 h-5" />}
+            href="/teacherDashboard/requests"
+            isCollapsed={isCollapsed}
+          />
+          <NavItem
+            title="Reports"
+            icon={<BarChart className="w-5 h-5" />}
+            href="/teacherDashboard/reports"
+            isCollapsed={isCollapsed}
+          />
+          <NavItem
+            title="Notifications"
+            icon={<Bell className="w-5 h-5" />}
+            href="/teacherDashboard/notifications"
+            isCollapsed={isCollapsed}
+          />
+          <NavItem
+            title="Profile"
+            icon={<User className="w-5 h-5" />}
+            href="/teacherDashboard/profile"
+            isCollapsed={isCollapsed}
+          />
+
+          {/* Logout */}
+          <div className="mt-auto pt-4 border-t border-gray-200">
+
+            <LogoutButton isCollapsed={isCollapsed} />
+          </div>
+        </div>
+      </nav>
+
+      {/* Main Content */}
+      <main className={`flex-1 p-8 transition-all ${isCollapsed ? 'ml-16' : 'ml-64'}`}>
+        {/* Top Bar */}
+        <div className="flex justify-between items-center mb-8">
+          <h1 className="text-2xl font-bold text-gray-800">
+            Welcome to SIMS
+          </h1>
+          <div className="flex items-center space-x-4">
+            <Link 
+              href="/teacherDashboard/notifications"
+              className="text-gray-600 hover:text-indigo-600 relative"
+            >
+              <Bell className="w-5 h-5" />
+              <span className="absolute top-0 right-0 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-red-100 bg-red-600 rounded-full">
+                3
+              </span>
+            </Link>
+            <Link
+              href="/profile"
+              className="text-gray-600 hover:text-indigo-600"
+            >
+              <User className="w-5 h-5" />
+            </Link>
+          </div>
+        </div>
+
+        {children}
+      </main>
+    </div>
+  );
+}

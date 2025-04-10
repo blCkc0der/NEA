@@ -1,8 +1,10 @@
 'use client';
 
-import { Search, Box, AlertTriangle, ClipboardList, SquarePlus } from "lucide-react";
+import { Search, Box, AlertTriangle, ClipboardList } from "lucide-react";
 import {Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis} from "recharts";
-import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
+import { InventoryItem } from "./inventory/page";
+
 
 const monthyUsageData = [
     {month: "Jan", usage: 200}, 
@@ -28,12 +30,30 @@ const requestSummaryData = [
 ]
 
 export default function DashboardPage() {
-    const router = useRouter();
+    const [items, setItems] = useState<InventoryItem[]>([]);
+    const [error, setError] = useState<string | null>(null);
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api';
     
-    const handleStockLevels =  () => {
-        // perform logout
-        router.push('/')
+    // Fetch inventory items
+    // is there need for setError?
+    useEffect(() => {
+        fetchInventoryItems();
+      }, []);
+    
+    const fetchInventoryItems = async () => {
+    try {
+        const response = await fetch(`${API_URL}/inventory/`);
+        if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+        const data = await response.json();
+        setItems(data);
+        setError(null); 
+    } catch (error) {
+        console.error('Error fetching inventory items:', error);
+        setError('Failed to fetch inventory items. Please try again later.');
     }
+};
 
     return (
         <>
@@ -46,19 +66,6 @@ export default function DashboardPage() {
                     placeholder="Search"
                     className="w-full px-2 bg-transparent focus:outline-none"
                 /> 
-            </div>
-        </div>
-
-        {/*Stock level update*/}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-            <div className="bg-white rounded-lg p-4 shadow-sm">
-                <button
-                    onClick={handleStockLevels}
-                    className='flex items-center space-x-2 p-3 rounded-lg text-grey-60 hover:bg-grey-100'
-                >
-                    <Box className='w-5 h-5'/>
-                    <span className='font-medium'> Set Stock Levels</span>
-                </button>
             </div>
         </div>
 
@@ -140,33 +147,30 @@ export default function DashboardPage() {
                     </tr>
                 </thead>
                 <tbody>
-                    {[1, 2, 3, 4, 5].map((item, index) => {
-                        const statusColors = {
-                            'In Stock': 'bg-green-100 text-green-800',
-                            'Low Stock': 'bg-yellow-100 text-yellow-800',
-                            'Out of Stock': 'bg-red-100 text-red-800',
-                        } as const;
-
-                        // Get status diretly without intrmediate array
-                        const status = [
-                            'In Stock',
-                            'Low Stock',
-                            'Out of Stock',
-                        ][index % 3] as keyof typeof statusColors;
-                        
-                        return(
-                            <tr key={item} className="border-b last:border-b-0 hover:bg-gray-50">
-                                <td className="py-4">Item {item}</td>
-                                <td>Category {item} </td>
-                                <td> {item * 100} </td>
-                                <td>
-                                    <span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusColors[status]}`}>
-                                        {status}
-                                    </span>
-                                </td>
-                            </tr>
-                        );
-                    })}
+                    {items.slice(0,5).map((item) => (
+                    <tr key={item.id} className="transition-colors hover:bg-gray-50">
+                        <td className="px-6 py-4 text-sm text-gray-800">{item.name}</td>
+                        <td className="px-6 py-4 text-sm text-gray-600">{item.category}</td>
+                        <td className="px-6 py-4 text-sm text-gray-600">{item.quantity}</td>
+                        <td className="px-6 py-4 text-sm text-gray-600">
+                        <span
+                            className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                            item.status === 'in_stock'
+                                ? 'bg-green-100 text-green-800'
+                                : item.status === 'low_stock'
+                                ? 'bg-yellow-100 text-yellow-800'
+                                : 'bg-red-100 text-red-800'
+                            }`}
+                        >
+                            {item.status === 'in_stock'
+                            ? 'In Stock'
+                            : item.status === 'low_stock'
+                            ? 'Low Stock'
+                            : 'Out of Stock'}
+                        </span>
+                        </td>
+                    </tr>
+                ))}    
                 </tbody>
             </table>
         </div>

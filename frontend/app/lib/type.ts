@@ -1,9 +1,10 @@
-
+{/* Stock Manager*/}
 export interface InventoryItem {
     id: number;
     name: string;
     category: string;
     quantity: number;
+    lowStockQuantity: number;
     status: "In Stock" | "Low Stock" | "Out of Stock";
 }
 
@@ -30,3 +31,38 @@ export interface Notification {
     relatedItem?: string;
     relatedRequest?: number;
 }
+
+export interface StockData {
+    id: number;
+    item: string;
+    category: string;
+    startStock: number;
+    endStock: number;
+    usage: number;
+  }
+  
+  {/*shouldn't there be a notes area here*/}
+export interface RequestData {
+    id: number;
+    teacher: string;
+    item: string;
+    status: 'Completed' | 'Pending' | 'Rejected';
+    date: string;
+  }
+  
+
+{/* Teacher */}
+export interface TeacherInventoryItem {
+    id: number;
+    name: string;
+    quantity: number;
+}
+
+export interface TeacherRequestData {
+    id: number;
+    date: string;
+    item: string;
+    quantity: number;
+    status: 'Approved' | 'Pending' | 'Rejected';
+}
+
