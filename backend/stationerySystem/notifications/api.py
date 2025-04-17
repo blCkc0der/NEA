@@ -1,22 +1,30 @@
 from rest_framework import viewsets, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action # Allows custom endpoints
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
-from django.contrib.contenttypes.models import ContentType
+from django.contrib.contenttypes.models import ContentType # Used for dynamic linking to other models
 from django.db.models import Q
 from .models import Notification
 from .serializers import NotificationSerializer
-from django.conf import settings
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
 
 class NotificationViewSet(viewsets.ModelViewSet):
+    """
+    Handles viewing, creating, and updating user notifications.
+    Includes custom endpoints for marking notifications read/unread.
+    """
     serializer_class = NotificationSerializer
     permission_classes = [AllowAny]  # Allow anyone in development
-    http_method_names = ['get', 'post', 'patch', 'delete']  # Disable PUT
+    http_method_names = ['get', 'post', 'patch', 'delete']   # Restricts HTTP methods (excludes PUT)
 
     def get_queryset(self):
+        """
+        Returns notifications relevant to the current user's role.
+        Teachers only see REQUEST_STATUS or LOW_STOCK.
+        Managers/Admins see NEW_REQUEST or LOW_STOCK.
+        """
         user = self.request.user
         queryset = Notification.objects.select_related('recipient', 'content_type')
 
@@ -24,10 +32,9 @@ class NotificationViewSet(viewsets.ModelViewSet):
             # In development, return all notifications if unauthenticated
             return Notification.objects.all()
         
-        # Filter by recipient and add role-specific filters
         queryset = queryset.filter(recipient=user)
         
-        # Role-based additional filtering
+         # Conditional query filtering based on user role
         if user.role == 'teacher':
             queryset = queryset.filter(
                 Q(notification_type=Notification.NotificationType.REQUEST_STATUS) |
@@ -42,6 +49,9 @@ class NotificationViewSet(viewsets.ModelViewSet):
         return queryset.order_by('-timestamp')
 
     def create(self, request, *args, **kwargs):
+        """
+        Create a new notification, linking it generically to any content type if specified.
+        """
         user = request.user
         if not user.is_authenticated:
             # Use a default user for development
@@ -60,11 +70,11 @@ class NotificationViewSet(viewsets.ModelViewSet):
 
         data = request.data.copy()
         
-        # Handle recipient if not provided (default to current user)
+         # If no recipient provided, default to sender
         if 'recipient' not in data:
             data['recipient'] = user.id
         
-        # Handle content object reference
+        # Handle optional generic linking to content object
         if 'content_type' in data and 'object_id' in data:
             try:
                 content_type = ContentType.objects.get(model=data['content_type'])
@@ -77,13 +87,16 @@ class NotificationViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        serializer.save()   #Dynamic object persistence based on model context
         
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     @action(detail=False, methods=['get'])
     def unread_count(self, request):
+        """
+        Get count of unread notifications for the current user.
+        """
         user = request.user
         if not user.is_authenticated:
             return Response({"count": 0})
@@ -93,6 +106,9 @@ class NotificationViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def mark_as_read(self, request, pk=None):
+        """
+        Mark a single notification as read.
+        """
         notification = self.get_object()
         notification.is_read = True
         notification.save()
@@ -100,6 +116,9 @@ class NotificationViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def mark_all_as_read(self, request):
+        """
+        Mark all notifications as read for the current user.
+        """
         user = request.user
         if not user.is_authenticated:
             return Response({"status": "success", "marked_read": 0})
@@ -109,13 +128,18 @@ class NotificationViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def recent(self, request):
+        """
+        Return the 10 most recent notifications.
+        """
         queryset = self.filter_queryset(self.get_queryset())
-        recent_notifications = queryset[:10]  # Get last 10 notifications
+        recent_notifications = queryset[:10] # List slicing and sorting
         serializer = self.get_serializer(recent_notifications, many=True)
         return Response(serializer.data)
 
     def perform_destroy(self, instance):
-        # Only allow deleting notifications for the current user
+        """
+        Only allow deleting notifications for the current user (defensive programming).
+        """
         if self.request.user == instance.recipient:
             instance.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)

@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny  # Allow anyone in development
 from .models import Request
 from .serializers import RequestSerializer, RequestUpdateSerializer
-from django.db import transaction
+from django.db import transaction   # Transaction ensures atomic updates
 from django.contrib.auth import get_user_model
 from inventory.models import InventoryItem
 
@@ -13,8 +13,13 @@ User = get_user_model()
 
 class RequestViewSet(viewsets.ModelViewSet):
     serializer_class = RequestSerializer
-    permission_classes = [AllowAny]  # Allow anyone in development
+    permission_classes = [AllowAny]  # In production, restrict this
 
+    """
+        Returns a queryset depending on the user's role.
+        Admins and stock managers can see all requests,
+        while teachers only see their own.
+    """
     def get_queryset(self):
         queryset = Request.objects.select_related(
             'user__teacher_profile',
@@ -22,7 +27,8 @@ class RequestViewSet(viewsets.ModelViewSet):
         ).prefetch_related(
             'user__teacher_profile__teacherclasssubject_set__class_taught',
             'user__teacher_profile__teacherclasssubject_set__subject'
-        )
+        )   # Complex cross-table joins with select_related & prefetch_related
+
         user = self.request.user
         if not user.is_authenticated:
             # In development, return all requests if unauthenticated
@@ -30,9 +36,14 @@ class RequestViewSet(viewsets.ModelViewSet):
         # Use the 'role' field for queryset filtering
         if user.role in ['stock_manager', 'admin']:
             return Request.objects.all()
-        return Request.objects.filter(user=user)
+        return Request.objects.filter(user=user)    # Filter for teacher-specific view
 
     def create(self, request, *args, **kwargs):
+        """
+        Handles creation of a new request. If the user is not authenticated,
+        defaults to the first teacher (for development only).
+        Supports single and bulk request creation.
+        """
         user = self.request.user
         if not user.is_authenticated:
             # Use a default user for development (e.g., first teacher or superuser)
@@ -50,6 +61,7 @@ class RequestViewSet(viewsets.ModelViewSet):
                 )
         else:
             # Use properties for object-level checks
+            #  Role-based authorization logic
             if not user.is_teacher and not user.is_admin:
                 return Response(
                     {"error": "Only teachers can create requests"},
@@ -57,6 +69,8 @@ class RequestViewSet(viewsets.ModelViewSet):
                 )
 
         data = request.data
+
+        # Support for bulk creation of requests
         if isinstance(data, list):  # Handle bulk creation
             serializer = self.get_serializer(data=data, many=True)
         else:
@@ -64,12 +78,14 @@ class RequestViewSet(viewsets.ModelViewSet):
             
         serializer.is_valid(raise_exception=True)
         
+        # Use of transactions for data integrity
         with transaction.atomic():
             instances = serializer.save(user=user)
             if not isinstance(instances, list):
                 instances = [instances]
             
             for instance in instances:
+                # Prevent over-requesting inventory
                 if instance.quantity > instance.item.quantity:
                     return Response(
                         {"error": f"Requested quantity exceeds available stock for {instance.item.name}"},
@@ -81,6 +97,10 @@ class RequestViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['patch'], permission_classes=[AllowAny])
     def update_status(self, request, pk=None):
+        """
+        Updates the status of a request 
+        Only stock managers or admins can perform this.
+        """
         user = self.request.user
         if not user.is_authenticated:
             # Use a default stock manager for development
@@ -110,6 +130,7 @@ class RequestViewSet(viewsets.ModelViewSet):
         
         with transaction.atomic():
             serializer.save(stock_manager=user)
+            # Deduct inventory if approved
             if serializer.data['status'] == Request.APPROVED:
                 if request_instance.quantity > request_instance.item.quantity:
                     return Response(
@@ -122,6 +143,10 @@ class RequestViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
     
     def partial_update(self, request, *args, **kwargs):
+        """
+        Allows updating specific fields.
+        If approved, automatically deducts from inventory.
+        """
         instance = self.get_object()
         new_status = request.data.get('status')
         item_id = request.data.get('item_id')
@@ -151,8 +176,12 @@ class RequestViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
+    
     @action(detail=True, methods=['patch'])
     def approve(self, request, pk=None):
+        """
+        Shortcut endpoint to quickly approve a request.
+        """
         request_obj = self.get_object()
         serializer = self.get_serializer(
             request_obj, 

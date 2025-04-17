@@ -1,327 +1,218 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status
-from django.db.models import Sum, Count, F, Q
-from django.utils import timezone
-from django.http import HttpResponse  # Added missing import
-from datetime import timedelta, datetime
-from io import BytesIO
-import xlsxwriter
+from django.db.models import Count, Q, Sum, F   # Aggregate SQL functions
+from inventory.models import InventoryItem, StockLog
+from requests.models import Request
+from inventory.serializers import StockReportSerializer
+from requests.serializers import RequestSerializer
+from django.contrib.auth import get_user_model
+from datetime import datetime
+import openpyxl     #Used for Excel export (complex output formatting)
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
+from django.http import HttpResponse
+from io import BytesIO
+from rest_framework.authentication import SessionAuthentication
+from django.utils.timezone import make_aware
 
-from inventory.models import InventoryItem, Category, StockLog
-from requests.models import Request
-from inventory.serializers import InventoryItemSerializer, CategorySerializer
-from requests.serializers import RequestSerializer
+User = get_user_model()
 
+# ----------------------------
+# GET REPORT DATA (JSON)
+# ----------------------------
 class ReportView(APIView):
-    """
-    API endpoint for generating various inventory reports with filtering capabilities
-    """
-    
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [AllowAny]
+
     def get(self, request):
+        # Get report type and date filters
         report_type = request.query_params.get('type', 'stock')
         start_date = request.query_params.get('start_date')
         end_date = request.query_params.get('end_date')
-        category = request.query_params.get('category', 'all')
-        
+
+         # Defensive programming: Validate date format
         try:
-            if report_type == 'stock':
-                return self._generate_stock_report(start_date, end_date, category)
-            elif report_type == 'requests':
-                return self._generate_request_report(start_date, end_date, category)
-            elif report_type == 'movement':
-                return self._generate_movement_report(start_date, end_date, category)
-            elif report_type == 'teacher':
-                return self._generate_teacher_report(start_date, end_date, category)
-            else:
-                return Response(
-                    {'error': 'Invalid report type'}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        except Exception as e:
-            return Response(
-                {'error': str(e)}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-    
-    def _generate_stock_report(self, start_date, end_date, category):
-        """Generate stock level report with usage calculations"""
-        queryset = InventoryItem.objects.all()
-        
-        # Apply category filter
-        if category != 'all':
-            queryset = queryset.filter(category__name=category)
-        
-        # Get stock data with calculated usage from StockLog
-        stock_data = queryset.annotate(
-            usage=Sum(
-                'stock_logs__change',
-                filter=Q(stock_logs__change__lt=0),
-                default=0
-            )
-        ).order_by('category__name', 'name')
-        
-        serializer = InventoryItemSerializer(stock_data, many=True)
-        
-        # Calculate summary stats
-        total_items = stock_data.count()
-        low_stock_items = stock_data.filter(
-            quantity__lte=F('low_stock_threshold')
-        ).count()
-        out_of_stock_items = stock_data.filter(
-            quantity=0
-        ).count()
-        
-        return Response({
-            'type': 'stock',
-            'data': serializer.data,
-            'stats': {
-                'total_items': total_items,
-                'low_stock_items': low_stock_items,
-                'out_of_stock_items': out_of_stock_items,
-                'categories': self._get_category_stats()
-            }
-        })
-    
-    def _generate_request_report(self, start_date, end_date, category):
-        """Generate request fulfillment report"""
-        queryset = Request.objects.select_related('item', 'user').all()
-        
-        # Apply date filters
-        if start_date:
-            queryset = queryset.filter(created_at__gte=start_date)
-        if end_date:
-            queryset = queryset.filter(created_at__lte=end_date)
-        
-        # Apply category filter
-        if category != 'all':
-            queryset = queryset.filter(item__category__name=category)
-        
-        serializer = RequestSerializer(queryset, many=True)
-        
-        # Calculate summary stats
-        total_requests = queryset.count()
-        approved_requests = queryset.filter(status='approved').count()
-        pending_requests = queryset.filter(status='pending').count()
-        rejected_requests = queryset.filter(status='rejected').count()
-        
-        return Response({
-            'type': 'requests',
-            'data': serializer.data,
-            'stats': {
-                'total_requests': total_requests,
-                'approved_requests': approved_requests,
-                'pending_requests': pending_requests,
-                'rejected_requests': rejected_requests,
-                'popular_items': self._get_popular_items(start_date, end_date)
-            }
-        })
-    
-    def _generate_movement_report(self, start_date, end_date, category):
-        """Generate stock movement/transaction report"""
-        queryset = StockLog.objects.select_related('item', 'changed_by').all()
-        
-        # Apply date filters
-        if start_date:
-            queryset = queryset.filter(timestamp__gte=start_date)
-        if end_date:
-            queryset = queryset.filter(timestamp__lte=end_date)
-        
-        # Apply category filter
-        if category != 'all':
-            queryset = queryset.filter(item__category__name=category)
-        
-        # Calculate summary stats
-        total_movements = queryset.count()
-        stock_in = queryset.filter(change__gt=0).aggregate(
-            Sum('change'))['change__sum'] or 0
-        stock_out = abs(queryset.filter(change__lt=0).aggregate(
-            Sum('change'))['change__sum'] or 0)
-        
-        return Response({
-            'type': 'movement',
-            'data': self._serialize_movement_data(queryset),
-            'stats': {
-                'total_movements': total_movements,
-                'stock_in': stock_in,
-                'stock_out': stock_out,
-                'most_active_items': self._get_most_active_items(start_date, end_date)
-            }
-        })
-    
-    def _generate_teacher_report(self, start_date, end_date, category):
-        """Generate teacher-specific usage report"""
-        queryset = Request.objects.select_related(
-            'item', 'user', 'user__teacher_profile'
-        ).filter(user__role='teacher')
-        
-        # Apply date filters
-        if start_date:
-            queryset = queryset.filter(created_at__gte=start_date)
-        if end_date:
-            queryset = queryset.filter(created_at__lte=end_date)
-        
-        # Apply category filter
-        if category != 'all':
-            queryset = queryset.filter(item__category__name=category)
-        
-        # Group by teacher and calculate stats
-        teacher_stats = queryset.values(
-            'user__id',
-            'user__username',
-            'user__email'
-        ).annotate(
-            total_requests=Count('id'),
-            approved_requests=Count('id', filter=Q(status='approved')),
-            total_items=Sum('quantity'),
-            categories_used=Count('item__category', distinct=True)
-        ).order_by('-total_requests')
-        
-        return Response({
-            'type': 'teacher',
-            'data': list(teacher_stats),
-            'stats': {
-                'total_teachers': teacher_stats.count(),
-                'most_active_teacher': self._get_most_active_teacher(start_date, end_date),
-                'most_requested_items': self._get_popular_items(start_date, end_date, limit=5)
-            }
-        })
-    
-    # Helper methods for data aggregation
-    def _get_category_stats(self):
-        return Category.objects.annotate(
-            item_count=Count('inventoryitem'),
-            low_stock=Count('inventoryitem', filter=Q(
-                inventoryitem__quantity__lte=F('inventoryitem__low_stock_threshold'),
-                inventoryitem__quantity__gt=0
-            )),
-            out_of_stock=Count('inventoryitem', filter=Q(
-                inventoryitem__quantity=0
-            ))
-        ).values('name', 'item_count', 'low_stock', 'out_of_stock')
-    
-    def _get_popular_items(self, start_date, end_date, limit=5):
-        queryset = Request.objects.filter(status='approved')
-        if start_date:
-            queryset = queryset.filter(created_at__gte=start_date)
-        if end_date:
-            queryset = queryset.filter(created_at__lte=end_date)
-        
-        return queryset.values(
-            'item__name',
-            'item__category__name'
-        ).annotate(
-            total_quantity=Sum('quantity'),
-            request_count=Count('id')
-        ).order_by('-total_quantity')[:limit]
-    
-    def _get_most_active_items(self, start_date, end_date, limit=5):
-        queryset = StockLog.objects.all()
-        if start_date:
-            queryset = queryset.filter(timestamp__gte=start_date)
-        if end_date:
-            queryset = queryset.filter(timestamp__lte=end_date)
-        
-        return queryset.values(
-            'item__name',
-            'item__category__name'
-        ).annotate(
-            movement_count=Count('id'),
-            net_change=Sum('change')
-        ).order_by('-movement_count')[:limit]
-    
-    def _get_most_active_teacher(self, start_date, end_date):
-        queryset = Request.objects.filter(user__role='teacher')
-        if start_date:
-            queryset = queryset.filter(created_at__gte=start_date)
-        if end_date:
-            queryset = queryset.filter(created_at__lte=end_date)
-        
-        result = queryset.values(
-            'user__username'
-        ).annotate(
-            request_count=Count('id')
-        ).order_by('-request_count').first()
-        
-        return result or {'user__username': 'N/A', 'request_count': 0}
-    
-    def _serialize_movement_data(self, queryset):
-        return list(queryset.values(
-            'timestamp',
-            'item__name',
-            'item__category__name',
-            'change',
-            'quantity_after_change',
-            'reason',
-            'changed_by__username'
-        ).order_by('-timestamp'))
+            start_date = datetime.strptime(start_date, '%Y-%m-%d') if start_date else None
+            end_date = datetime.strptime(end_date, '%Y-%m-%d') if end_date else None
+        except ValueError:
+            return Response({"error": "Invalid date format"}, status=status.HTTP_400_BAD_REQUEST)
 
+        data = []
+        stats = {}
 
-class ExportReportView(APIView):
-    """
-    API endpoint for exporting reports in various formats (PDF, Excel)
-    """
-    
-    def get(self, request):
-        export_format = request.query_params.get('format', 'pdf')
-        report_type = request.query_params.get('type', 'stock')
+         # Handle different report types
+        if report_type == 'stock':
+            queryset = InventoryItem.objects.all()
+            if start_date:
+                queryset = queryset.filter(updated_at__gte=start_date)
+            if end_date:
+                queryset = queryset.filter(updated_at__lte=end_date)
+            
+            # Aggregate logic to count statuses
+            serializer_context = {'start_date': start_date, 'end_date': end_date}
+            data = StockReportSerializer(queryset, many=True, context=serializer_context).data
+            stats = {
+                'total_items': queryset.count(),
+                'low_stock_items': queryset.filter(status='low_stock').count(),
+                'out_of_stock_items': queryset.filter(status='out_of_stock').count(),
+            }
+
+        elif report_type == 'requests':
+            queryset = Request.objects.select_related('user', 'item').all()
+            if start_date:
+                queryset = queryset.filter(created_at__gte=start_date)
+            if end_date:
+                queryset = queryset.filter(created_at__lte=end_date)
+            data = RequestSerializer(queryset, many=True).data
+            stats = {
+                'total_requests': queryset.count(),
+                'approved_requests': queryset.filter(status='approved').count(),
+                'pending_requests': queryset.filter(status='pending').count(),
+            }
+
+        elif report_type == 'teacher':
+            # SQL aggregation with filter condition
+            queryset = Request.objects.values(
+                'user__email',
+                'user__first_name',
+                'user__last_name'
+            ).annotate(
+                total_requests=Count('id'),
+                approved_requests=Count('id', filter=Q(status='approved'))
+            ).order_by('-total_requests')
+            
+            if start_date:
+                queryset = queryset.filter(created_at__gte=start_date)
+            if end_date:
+                queryset = queryset.filter(created_at__lte=end_date)
+            
+            data = [
+                {
+                    'user_email': item['user__email'],
+                    'user_name': f"{item['user__first_name'] or ''} {item['user__last_name'] or ''}".strip(),
+                    'total_requests': item['total_requests'],
+                    'approved_requests': item['approved_requests']
+                }
+                for item in queryset
+            ]
+            stats = {
+                'total_teachers': len(data),
+                'total_requests': sum(item['total_requests'] for item in data),
+                'approved_requests': sum(item['approved_requests'] for item in data),
+            }
+
+        else:
+            return Response({"error": "Invalid report type"}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({"data": data, "stats": stats})
+
+# ----------------------------
+# EXPORT REPORT AS PDF/EXCEL
+# ----------------------------
+class ReportExportView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        report_type = request.data.get('type', 'stock')
+        format_type = request.data.get('format', 'pdf')
         start_date = request.query_params.get('start_date')
         end_date = request.query_params.get('end_date')
-        category = request.query_params.get('category', 'all')
-        
-        # Get the data
-        report_view = ReportView()
-        response = report_view.get(request)
-        
-        if response.status_code != status.HTTP_200_OK:
-            return response
-        
-        data = response.data
-        
-        # Generate export file
-        if export_format == 'pdf':
-            return self._export_pdf(report_type, data)
-        elif export_format == 'excel':
-            return self._export_excel(report_type, data)
+
+        try:
+            start_date = make_aware(datetime.strptime(start_date, '%Y-%m-%d')) if start_date else None
+            end_date = make_aware(datetime.strptime(end_date, '%Y-%m-%d')) if end_date else None
+        except ValueError:
+            return Response({"error": "Invalid date format"}, status=status.HTTP_400_BAD_REQUEST)
+
+        headers = []
+        rows = []
+
+         # Same logic reused to generate report content based on type
+        if report_type == 'stock':
+            queryset = InventoryItem.objects.all()
+            if start_date:
+                queryset = queryset.filter(updated_at__gte=start_date)
+            if end_date:
+                queryset = queryset.filter(updated_at__lte=end_date)
+            serializer_context = {'start_date': start_date, 'end_date': end_date}
+            data = StockReportSerializer(queryset, many=True, context=serializer_context).data
+            headers = ['ID', 'Name', 'Quantity', 'Usage', 'Status']
+            rows = [[item['id'], item['name'], item['quantity'], item['usage'], item['status']] for item in data]
+
+        elif report_type == 'requests':
+            queryset = Request.objects.select_related('user', 'item').all()
+            if start_date:
+                queryset = queryset.filter(created_at__gte=start_date)
+            if end_date:
+                queryset = queryset.filter(created_at__lte=end_date)
+            data = RequestSerializer(queryset, many=True).data
+            headers = ['ID', 'Teacher', 'Item', 'Status', 'Date']
+            rows = [
+                [
+                    item['id'],
+                    f"{item['user']['first_name'] or ''} {item['user']['last_name'] or ''}".strip() if item['user'] else 'N/A',
+                    item['item']['name'] if item['item'] else 'N/A',
+                    item['status'],
+                    item['created_at']
+                ]
+                for item in data
+            ]
+
+        elif report_type == 'teacher':
+            queryset = Request.objects.values(
+                'user__email',
+                'user__first_name',
+                'user__last_name'
+            ).annotate(
+                total_requests=Count('id'),
+                approved_requests=Count('id', filter=Q(status='approved'))
+            ).order_by('-total_requests')
+            
+            if start_date:
+                queryset = queryset.filter(created_at__gte=start_date)
+            if end_date:
+                queryset = queryset.filter(created_at__lte=end_date)
+            
+            data = [
+                {
+                    'user_email': item['user__email'],
+                    'user_name': f"{item['user__first_name'] or ''} {item['user__last_name'] or ''}".strip(),
+                    'total_requests': item['total_requests'],
+                    'approved_requests': item['approved_requests']
+                }
+                for item in queryset
+            ]
+            headers = ['Teacher Email', 'Teacher Name', 'Total Requests', 'Approved Requests']
+            rows = [
+                [item['user_email'], item['user_name'], item['total_requests'], item['approved_requests']]
+                for item in data
+            ]
+
         else:
-            return Response(
-                {'error': 'Unsupported export format'}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"error": "Invalid report type"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if format_type == 'pdf':
+            return self.generate_pdf(report_type, headers, rows)
+        elif format_type == 'excel':
+            return self.generate_excel(report_type, headers, rows)
+        else:
+            return Response({"error": "Invalid format"}, status=status.HTTP_400_BAD_REQUEST)
     
-    def _export_pdf(self, report_type, data):
+     # Complex user-defined routine: generates a styled PDF table
+    def generate_pdf(self, report_type, headers, rows):
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter)
         elements = []
-        
+
         styles = getSampleStyleSheet()
-        
-        # Add title
-        title = f"{report_type.replace('_', ' ').title()} Report"
-        elements.append(Paragraph(title, styles['Title']))
-        
-        # Add date range if available
-        if data.get('stats', {}).get('date_range'):
-            elements.append(Paragraph(
-                f"Date Range: {data['stats']['date_range']}", 
-                styles['Normal']
-            ))
-        
-        # Add appropriate table based on report type
-        if report_type == 'stock':
-            table_data = self._prepare_stock_table(data['data'])
-        elif report_type == 'requests':
-            table_data = self._prepare_request_table(data['data'])
-        elif report_type == 'movement':
-            table_data = self._prepare_movement_table(data['data'])
-        else:
-            table_data = [['No data available']]
-        
-        table = Table(table_data)
+        elements.append(Paragraph(f"{report_type.capitalize()} Report", styles['Title']))
+
+        data = [headers] + rows
+        table = Table(data)
         table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -330,125 +221,50 @@ class ExportReportView(APIView):
             ('FONTSIZE', (0, 0), (-1, 0), 14),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
             ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
         ]))
-        
         elements.append(table)
-        
-        # Add summary stats if available
-        if data.get('stats'):
-            elements.append(Paragraph("Summary Statistics", styles['Heading2']))
-            stats_text = "\n".join(
-                f"{k.replace('_', ' ').title()}: {v}" 
-                for k, v in data['stats'].items() 
-                if not isinstance(v, (list, dict))
-            )
-            elements.append(Paragraph(stats_text, styles['Normal']))
-        
+
         doc.build(elements)
         buffer.seek(0)
-        
-        response = HttpResponse(buffer, content_type='application/pdf')
-        response['Content-Disposition'] = (
-            f'attachment; filename="{report_type}_report.pdf"'
-        )
+
+        response = HttpResponse(content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{report_type}_report.pdf"'
+        response.write(buffer.getvalue())
+        buffer.close()
         return response
-    
-    def _export_excel(self, report_type, data):
+
+    # Complex user-defined routine: Excel export with styling
+    def generate_excel(self, report_type, headers, rows):
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.title = f"{report_type.capitalize()} Report"
+
+        sheet.append(headers)
+        for row in rows:
+            sheet.append(row)
+
+        # Adjust column widths dynamically
+        for col in sheet.columns:
+            max_length = 0
+            column = col[0].column_letter
+            for cell in col:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = max_length + 2
+            sheet.column_dimensions[column].width = adjusted_width
+
         buffer = BytesIO()
-        workbook = xlsxwriter.Workbook(buffer)
-        worksheet = workbook.add_worksheet(report_type[:31])  # Sheet name max 31 chars
-        
-        # Add header format
-        header_format = workbook.add_format({
-            'bold': True,
-            'bg_color': '#D3D3D3',
-            'border': 1,
-            'align': 'center'
-        })
-        
-        # Add data based on report type
-        if report_type == 'stock':
-            headers = ["Item", "Category", "Current Stock", "Low Threshold", "Usage", "Status"]
-            table_data = self._prepare_stock_table(data['data'])
-        elif report_type == 'requests':
-            headers = ["Teacher", "Item", "Quantity", "Status", "Date", "Notes"]
-            table_data = self._prepare_request_table(data['data'])
-        elif report_type == 'movement':
-            headers = ["Date", "Item", "Category", "Change", "New Qty", "Reason", "Changed By"]
-            table_data = self._prepare_movement_table(data['data'])
-        else:
-            headers = ["Data"]
-            table_data = [["No data available"]]
-        
-        # Write headers
-        for col, header in enumerate(headers):
-            worksheet.write(0, col, header, header_format)
-        
-        # Write data
-        for row, row_data in enumerate(table_data[1:], start=1):
-            for col, cell_data in enumerate(row_data):
-                worksheet.write(row, col, cell_data)
-        
-        # Add charts for certain reports
-        if report_type == 'stock' and len(table_data) > 1:
-            chart = workbook.add_chart({'type': 'column'})
-            chart.add_series({
-                'name': 'Stock Levels',
-                'categories': f'={report_type[:31]}!$A$2:$A${len(table_data)}',
-                'values': f'={report_type[:31]}!$C$2:$C${len(table_data)}',
-            })
-            worksheet.insert_chart('H2', chart)
-        
-        workbook.close()
+        workbook.save(buffer)
         buffer.seek(0)
-        
+
         response = HttpResponse(
-            buffer,
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
-        response['Content-Disposition'] = (
-            f'attachment; filename="{report_type}_report.xlsx"'
-        )
+        response['Content-Disposition'] = f'attachment; filename="{report_type}_report.xlsx"'
+        response.write(buffer.getvalue())
+        buffer.close()
         return response
-    
-    # Table preparation helpers
-    def _prepare_stock_table(self, data):
-        table = [["Item", "Category", "Current Stock", "Low Threshold", "Usage", "Status"]]
-        for item in data:
-            table.append([
-                item['name'],
-                item['category']['name'],
-                item['quantity'],
-                item['low_stock_threshold'],
-                abs(item.get('usage', 0)),
-                item['status'].replace('_', ' ').title()
-            ])
-        return table
-    
-    def _prepare_request_table(self, data):
-        table = [["Teacher", "Item", "Quantity", "Status", "Date", "Notes"]]
-        for req in data:
-            table.append([
-                req['user']['username'],
-                req['item']['name'],
-                req['quantity'],
-                req['status'].title(),
-                req['created_at'],
-                req.get('notes', '')[:50]  # Truncate long notes
-            ])
-        return table
-    
-    def _prepare_movement_table(self, data):
-        table = [["Date", "Item", "Category", "Change", "New Qty", "Reason", "Changed By"]]
-        for movement in data:
-            table.append([
-                movement['timestamp'],
-                movement['item__name'],
-                movement['item__category__name'],
-                movement['change'],
-                movement['quantity_after_change'],
-                movement['reason'],
-                movement['changed_by__username'] or 'System'
-            ])
-        return table

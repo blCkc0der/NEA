@@ -10,9 +10,16 @@ from django.contrib.auth import get_user_model
 
 User = get_user_model()
 
+# === Inventory Change Detection ===
+
 @receiver(pre_save, sender=InventoryItem)
 def check_inventory_changes(sender, instance, **kwargs):
-    """Track inventory changes for notifications"""
+    """
+    Detects changes in inventory quantity before saving.
+    Stores original state to compare after saving.
+    
+    Custom logic triggers based on state comparison.
+    """
     if instance.pk:
         try:
             original = InventoryItem.objects.get(pk=instance.pk)
@@ -25,7 +32,10 @@ def check_inventory_changes(sender, instance, **kwargs):
 
 @receiver(post_save, sender=InventoryItem)
 def notify_inventory_changes(sender, instance, created, **kwargs):
-    """Send notifications for inventory changes"""
+    """
+    Triggered after inventory save; checks for stock level changes 
+    and notifies appropriate users accordingly.
+    """
     if created:
         # Optionally notify about new items being added
         pass
@@ -42,7 +52,10 @@ def notify_inventory_changes(sender, instance, created, **kwargs):
         notify_teachers_about_stock_changes(instance)
 
 def notify_low_stock(item):
-    """Notify stock managers about low stock items"""
+    """
+    Sends low stock notifications to all stock managers.
+    Iterates through filtered user roles to dispatch messages.
+    """
     stock_managers = User.objects.filter(role='stock_manager')
     content_type = ContentType.objects.get_for_model(item)
 
@@ -57,7 +70,9 @@ def notify_low_stock(item):
         )
 
 def notify_teachers_about_stock_changes(item):
-    """Notify teachers about changes to items they're assigned"""
+    """
+    Notifies teachers if their assigned inventory item is low.
+    """
     teacher_assignments = TeacherInventoryItem.objects.filter(item=item)
     content_type = ContentType.objects.get_for_model(item)
 
@@ -75,9 +90,14 @@ def notify_teachers_about_stock_changes(item):
                 link=f"/teacher-inventory/{item.id}"
             )
 
+# === Request Notifications ===
+
 @receiver(post_save, sender=Request)
 def handle_request_notifications(sender, instance, created, **kwargs):
-    """Handle notifications related to requests"""
+    """
+    Sends different notifications when a request is created or status is updated.
+    Combines object state comparison with linked object messaging.
+    """
     content_type = ContentType.objects.get_for_model(instance)
 
     if created:
@@ -120,9 +140,14 @@ def handle_request_notifications(sender, instance, created, **kwargs):
             # This shouldn't happen in post_save with created=False, but handle just in case
             pass
 
+# === Teacher Assignment Notifications ===
+
 @receiver(post_save, sender=TeacherInventoryItem)
 def notify_item_assignment(sender, instance, created, **kwargs):
-    """Notify teachers when items are assigned to them"""
+    """
+    Notifies teachers when items are assigned to them.
+    Uses content-type and object ID to generate dynamic links.
+    """
     if created:
         content_type = ContentType.objects.get_for_model(instance)
         Notification.objects.create(

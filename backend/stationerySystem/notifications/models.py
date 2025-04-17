@@ -1,22 +1,24 @@
 from django.db import models
-from django.conf import settings # To link to your User model
-from django.contrib.contenttypes.fields import GenericForeignKey
+from django.conf import settings   # To reference the custom User model
+from django.contrib.contenttypes.fields import GenericForeignKey    # For dynamic relations
 from django.contrib.contenttypes.models import ContentType
-from django.utils import timezone # Added for default timestamp if needed
+from django.utils import timezone    # Used for default timestamps
 
 class Notification(models.Model):
     """
     Model to store notifications for users.
     Uses GenericForeignKey to link to different related models (e.g., Item, Request).
     """
-    # Define choices for the type of notification
+     # Object-oriented programming + use of built-in polymorphic relationships
+
+     # Define notification types for filtering and UI display
     class NotificationType(models.TextChoices):
-        LOW_STOCK = 'LOW_STOCK', 'Low Stock' # For manager or teacher
-        NEW_REQUEST = 'NEW_REQUEST', 'New Request' # For manager
-        REQUEST_STATUS = 'REQUEST_STATUS', 'Request Status Change' # For teacher
+        LOW_STOCK = 'LOW_STOCK', 'Low Stock' # Triggered when stock is below threshold
+        NEW_REQUEST = 'NEW_REQUEST', 'New Request' # Teacher submits request
+        REQUEST_STATUS = 'REQUEST_STATUS', 'Request Status Change' # Request approved or rejected
         # Add any other types you might need, e.g., 'ITEM_ASSIGNED', 'SYSTEM_MESSAGE'
 
-    # Who should receive this notification?
+     # Recipient of the notification
     recipient = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -26,27 +28,29 @@ class Notification(models.Model):
     # The content of the notification message
     message = models.TextField()
 
-    # What kind of notification is this?
+   # Type of notification (based on NotificationType choices)
     notification_type = models.CharField(
-        max_length=50, # Increased length slightly for flexibility
+        max_length=50,
         choices=NotificationType.choices
     )
 
-    # Has the recipient read this notification?
+   # Whether the user has seen this notification
     is_read = models.BooleanField(default=False, db_index=True) # Index for faster filtering
 
-    # When was the notification created?
+    # When the notification was created
     timestamp = models.DateTimeField(default=timezone.now, db_index=True) # Index for ordering
 
-    # --- Generic Foreign Key to link to the related object ---
-    # Stores the model type (e.g., InventoryItem, Request)
+    # ---- Generic relation to allow linking to any object ---- 
     content_type = models.ForeignKey(
         ContentType,
         on_delete=models.CASCADE,
-        null=True, blank=True # Allow notifications without a direct object link
+        null=True, 
+        blank=True # Allow notifications without a direct object link
     )
+
     # Stores the primary key of the related object
     object_id = models.PositiveIntegerField(null=True, blank=True)
+
     # The actual related object (combines content_type and object_id)
     content_object = GenericForeignKey('content_type', 'object_id')
     # --- End Generic Foreign Key ---
@@ -56,13 +60,14 @@ class Notification(models.Model):
     link = models.CharField(max_length=500, blank=True, null=True)
 
     class Meta:
-        ordering = ['-timestamp'] # Show newest notifications first
+        ordering = ['-timestamp'] # sort newest first
         indexes = [
-            # Combined index for common query: unread notifications for a user
+             # Optimize for unread-notifications lookup
             models.Index(fields=['recipient', 'is_read', '-timestamp']),
         ]
 
     def __str__(self):
+        # Defensive programming: truncate message to avoid log clutter
         read_status = "Read" if self.is_read else "Unread"
         return f"To {self.recipient.email}: {self.message[:40]}... ({read_status})" # Assuming user model has email
 
